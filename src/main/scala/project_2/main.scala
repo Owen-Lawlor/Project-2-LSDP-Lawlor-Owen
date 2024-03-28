@@ -3,6 +3,9 @@ package project_2
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.functions._
 import org.apache.spark.rdd._
+import org.apache.spark.rdd.RDD
+import org.apache.spark.SparkContext
+import org.apache.spark.SparkConf
 
 
 object main{
@@ -77,11 +80,11 @@ object main{
     }
 
     def +(that: BJKSTSketch): BJKSTSketch = {    /* Merging two sketches */
-
+        new BJKSTSketch(this.bucket ++ that.bucket, this.z + that.z, BJKST_bucket_size)
     }
 
     def add_string(s: String, z_of_s: Int): BJKSTSketch = {   /* add a string to the sketch */
-
+       new BJKSTSketch(this.bucket + ((s, z_of_s)), this.z + z_of_s, BJKST_bucket_size)
     }
   }
 
@@ -100,13 +103,72 @@ object main{
 
 
   def BJKST(x: RDD[String], width: Int, trials: Int) : Double = {
-
+    val results = scala.collection.mutable.MutableList[Double]()
+    val num_buckets = scala.math.pow(2, width).toLong
+    for(_ <- 1 to trials) {
+      var z = 0
+      var B = Set.empty[(String, Int)]
+      val hash_func = new hash_function(num_buckets)
+      x.collect().foreach { item =>
+      val hash = hash_func.hash(item)
+      if (hash_func.zeroes(hash) >= z) {
+        B += (item -> hash_func.zeroes(hash))
+        while (B.size >= width) {
+          z += 1
+          B = B.filter(_._2 >= z)
+        }
+      }
+    }
+      /*if (hash_func.zeroes(hash_func.hash(x(i))) >= z){
+        B += (x(i), h(x(i)))
+        while (B.size >= width){
+          z += 1
+          B = B.filter(_._2 >= z)
+        }
+      }*/
+      val estimate = B.size * scala.math.pow(2, z)
+      results += estimate
+    }
+    val sorted_results = results.sortWith(_>_)
+    val res_size = sorted_results.size
+    val median = if (res_size % 2 == 0) {
+      val middleIndex = res_size / 2
+      (sorted_results(middleIndex - 1) + sorted_results(middleIndex)) / 2.0
+    } else {
+      sorted_results(res_size / 2)
+    }
+    median
   }
+
 
 
   def Tug_of_War(x: RDD[String], width: Int, depth:Int) : Long = {
-
+    val results = scala.collection.mutable.MutableList[Long]()
+    for(_ <- 1 to width) {
+      for(_ <- 1 to depth){
+        var z: Long = 0
+        z = x.map { str =>
+          val Radamacher = new four_universal_Radamacher_hash_function
+          val hash_val = Radamacher.hash(str)
+          hash_val
+        }.reduce(_+_)
+        val z_square = z * z
+        results += z_square  
+      }
+    }
+    val grouped_results = results.grouped(width).toList
+    val means = grouped_results.map(result => result.sum / result.size)
+    val sorted_means = means.sortWith(_>_)
+    val means_size = sorted_means.size
+    val median = if (means_size % 2 == 0) {
+      val middleIndex = means_size / 2
+      (sorted_means(middleIndex - 1) + sorted_means(middleIndex)) / 2.0
+    } else {
+      sorted_means(means_size / 2)
+    }
+    median.toLong
   }
+
 
 
   def exact_F0(x: RDD[String]) : Long = {
@@ -116,7 +178,8 @@ object main{
 
 
   def exact_F2(x: RDD[String]) : Long = {
-
+    val F2: Long = x.map(word => (word,1L)).reduceByKey(_+_).map{fi => fi._2.toLong * fi._2.toLong}.reduce(_+_)
+    return F2.toLong
   }
 
 
@@ -130,8 +193,9 @@ object main{
     }
     val input_path = args(0)
 
-  //    val df = spark.read.format("csv").load("data/2014to2017.csv")
-    val df = spark.read.format("csv").load(input_path)
+    val df = spark.read.format("csv").load("data/2014to2017.csv")
+    //val df = spark.read.format("csv").load("data/test_data.csv")
+    //val df = spark.read.format("csv").load(input_path)
     val dfrdd = df.rdd.map(row => row.getString(0))
 
     val startTimeMillis = System.currentTimeMillis()
